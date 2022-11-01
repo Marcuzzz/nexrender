@@ -11,6 +11,10 @@ const {expandEnvironmentVariables} = require('../helpers/path')
 const requireg = require('requireg')
 
 const download = (job, settings, asset) => {
+    
+    //added feature to be able to skip ae project check:
+    if (asset.src == 'will_be_ignored') return Promise.resolve();
+
     if (asset.type == 'data') return Promise.resolve();
 
     // eslint-disable-next-line

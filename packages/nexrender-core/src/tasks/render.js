@@ -1,7 +1,8 @@
 const fs = require('fs')
 const path = require('path')
 const {spawn} = require('child_process')
-const {expandEnvironmentVariables, checkForWSL} = require('../helpers/path')
+const {expandEnvironmentVariables, checkForWSL} = require('../helpers/path');
+const { resolve } = require('path');
 
 const progressRegex = /([\d]{1,2}:[\d]{2}:[\d]{2}:[\d]{2})\s+(\(\d+\))/gi;
 const durationRegex = /Duration:\s+([\d]{1,2}:[\d]{2}:[\d]{2}:[\d]{2})/gi;
@@ -22,6 +23,14 @@ const seconds = (string) => string.split(':')
  * This task creates rendering process
  */
 module.exports = (job, settings) => {
+
+    //Don't render if:
+    if (job['template']['src'] == 'will_be_ignored'){
+        return new Promise((resolve) =>
+            resolve(job)
+        );
+    }
+    
     settings.logger.log(`[${job.uid}] rendering job...`);
 
     // create container for our parameters
@@ -130,6 +139,7 @@ module.exports = (job, settings) => {
 
     // spawn process and begin rendering
     return new Promise((resolve, reject) => {
+                
         renderStopwatch = Date.now();
 
         if (settings.debug) {
