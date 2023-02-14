@@ -15,6 +15,7 @@ const option = (params, name, ...values) => {
         values.every(value => value !== undefined) ? params.push(name, ...values) : undefined
     }
 }
+
 const seconds = (string) => string.split(':')
     .map((e, i) => (i < 3) ? +e * Math.pow(60, 2 - i) : +e * 10e-6)
     .reduce((acc, val) => acc + val);
@@ -126,10 +127,10 @@ module.exports = (job, settings) => {
 
         // There will be multiple error messages parsed when nexrender throws an error,
         // but we want only the first
-        if(matchError !== null && !errorSent){
+        if (matchError !== null && !errorSent) {
             settings.logger.log(`[${job.uid}] rendering reached an error: ${matchError[1]}`);
             if (job.hasOwnProperty('onRenderError') && typeof job['onRenderError'] == 'function') {
-                job.onRenderError(job, matchError[1]);
+                job.onRenderError(job, new Error(matchError[1]));
             }
             errorSent = true
         }
@@ -141,6 +142,8 @@ module.exports = (job, settings) => {
     return new Promise((resolve, reject) => {
                 
         renderStopwatch = Date.now();
+
+        let timeoutID = 0;
 
         if (settings.debug) {
             settings.logger.log(`[${job.uid}] spawning aerender process: ${settings.binary} ${params.join(' ')}`);
@@ -155,7 +158,10 @@ module.exports = (job, settings) => {
             // env: { PATH: path.dirname(settings.binary) },
         });
 
-        instance.on('error', err => reject(new Error(`Error starting aerender process: ${err}`)));
+        instance.on('error', err => {
+            clearTimeout(timeoutID);
+            return reject(new Error(`Error starting aerender process: ${err}`));
+        });
 
         instance.stdout.on('data', (data) => {
             output.push(parse(data.toString('utf8')));
@@ -166,6 +172,17 @@ module.exports = (job, settings) => {
             output.push(data.toString('utf8'));
             (settings.verbose && settings.logger.log(data.toString('utf8')));
         });
+
+        if (settings.maxRenderTimeout && settings.maxRenderTimeout > 0) {
+            const timeout = 1000 * settings.maxRenderTimeout;
+            timeoutID = setTimeout(
+                () => {
+                    reject(new Error(`Maximum rendering time exceeded`));
+                    instance.kill('SIGINT');
+                },
+                timeout
+            );
+        }
 
         /* on finish (code 0 - success, other - error) */
         instance.on('close', (code) => {
@@ -179,6 +196,7 @@ module.exports = (job, settings) => {
                     settings.logger.log(fs.readFileSync(logPath, 'utf8'))
                 }
 
+                clearTimeout(timeoutID);
                 return reject(new Error(outputStr || 'aerender.exe failed to render the output into the file due to an unknown reason'));
             }
 
@@ -189,6 +207,7 @@ module.exports = (job, settings) => {
 
             /* resolve job without checking if file exists, or its size for image sequences */
             if (settings.skipRender || job.template.imageSequence || ['jpeg', 'jpg', 'png'].indexOf(outputFile) !== -1) {
+                clearTimeout(timeoutID);
                 return resolve(job)
             }
 
@@ -196,11 +215,25 @@ module.exports = (job, settings) => {
             // the outputfile appears to be forced as .mov.
             // We need to maintain this here while we have 2022 and 2020
             // workers simultaneously
-            const movOutputFile = outputFile.replace(/\.avi$/g, '.mov')
-            const existsMovOutputFile = fs.existsSync(movOutputFile)
-            if (existsMovOutputFile) {
-              job.output = movOutputFile
+
+            const defaultOutputs = [
+                job.output,
+                job.output.replace(/\.avi$/g, '.mov'),
+                job.output.replace(/\.avi$/g, '.mp4'),
+                job.output.replace(/\.mov$/g, '.avi'),
+                job.output.replace(/\.mov$/g, '.mp4'),
+            ]
+
+            while (!fs.existsSync(defaultOutputs[0]) && defaultOutputs.length > 0) {
+                defaultOutputs.shift();
             }
+
+            if (defaultOutputs.length === 0) {
+                clearTimeout(timeoutID);
+                return reject(new Error(`Output file not found: ${job.output}`));
+            }
+
+            job.output = defaultOutputs[0];
 
             if (!fs.existsSync(job.output)) {
                 if (fs.existsSync(logPath)) {
@@ -208,6 +241,7 @@ module.exports = (job, settings) => {
                     settings.logger.log(fs.readFileSync(logPath, 'utf8'))
                 }
 
+                clearTimeout(timeoutID);
                 return reject(new Error(`Couldn't find a result file: ${outputFile}`))
             }
 
@@ -218,6 +252,7 @@ module.exports = (job, settings) => {
                 settings.logger.log(`[${job.uid}] Warning: output file size is less than 1000 bytes (${stats.size} bytes), be advised that file is corrupted, or rendering is still being finished`)
             }
 
+            clearTimeout(timeoutID);
             resolve(job)
         });
 
